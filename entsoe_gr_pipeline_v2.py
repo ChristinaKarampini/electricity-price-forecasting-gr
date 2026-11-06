@@ -11,7 +11,7 @@ RAW = "data_raw"
 # Βουλγαρίας/Τουρκίας υπάρχουν μόνο από αρχές Ιουλίου 2025 (βλ. download_summary.csv).
 WINDOWS = {"crisis": ("2021-01-01", "2022-12-31"),
            "recent": ("2025-07-10", "2026-09-30")}
-TEST_START = {"crisis": "2022-07-01", "recent": "2026-04-01"}     # τελευταίο ~εξάμηνο = test
+
 NB = ["BG", "AL", "MK", "TR", "IT"]
 
 WEATHER_POINTS = [   # (όνομα, lat, lon, βάρος): ενδεικτικά βάρη, τα βάρη αθροίζουν στο 1
@@ -134,101 +134,11 @@ def build(period):
     return out
 
 
-# ============================ ΗΜΕΡΗΣΙΟ ΕΠΙΠΕΔΟ ============================
-EXOG = ["residual_load", "res_share", "net_import", "w_temperature_2m", "w_wind_speed_100m",
-        "w_shortwave_radiation", "holiday", "spike_lag1"]
-RF_FEATS = EXOG + ["load_fc", "res_fc", "w_cloud_cover", "dow", "month", "price_lag1", "price_lag7"]
-
-
-def daily_dataset(h):
-    h = h.copy(); h.index = h.index.tz_convert("Europe/Athens")
-    d = h.resample("D").agg({"price": "mean", "load_fc": "mean", "res_fc": "mean", "res_share": "mean",
-                             "residual_load": "mean", "net_import": "mean", "w_temperature_2m": "mean",
-                             "w_wind_speed_100m": "mean", "w_shortwave_radiation": "mean",
-                             "w_cloud_cover": "mean", "holiday": "max", "spike": "max"})
-    d["n_hours"] = h["price"].resample("D").count()
-    d = d[d["n_hours"] >= 20].drop(columns="n_hours").asfreq("D")   # ημέρες με σχεδόν πλήρη δεδομένα
-    d["dow"], d["month"] = d.index.dayofweek, d.index.month
-    d["price_lag1"], d["price_lag7"] = d["price"].shift(1), d["price"].shift(7)
-    d["spike_lag1"] = d["spike"].shift(1)
-    return d.dropna()
-
-
-def stationarity(y):
-    from statsmodels.tsa.stattools import adfuller, kpss
-    adf = adfuller(y.dropna())[1]; kp = kpss(y.dropna(), regression="c", nlags="auto")[1]
-    print(f"ADF p={adf:.4f} (<0.05 => στάσιμη) | KPSS p={kp:.4f} (>0.05 => στάσιμη)")
-
-
-def metrics(y, p, name):
-    mae = np.mean(np.abs(y - p)); rmse = np.sqrt(np.mean((y - p) ** 2))
-    smape = 100 * np.mean(2 * np.abs(y - p) / (np.abs(y) + np.abs(p) + 1e-9))
-    print(f"{name:8s} MAE={mae:7.2f} RMSE={rmse:7.2f} sMAPE={smape:6.2f}%")
-    return np.abs(y - p)
-
-
-def walk_forward(d, test_start, refit_every=30, order=(1, 1, 1), seasonal=(1, 0, 1, 7)):
-    from statsmodels.tsa.statespace.sarimax import SARIMAX
-    from sklearn.ensemble import RandomForestRegressor
-    test_idx = d.index[d.index >= pd.Timestamp(test_start, tz=d.index.tz)]
-    out = pd.DataFrame(index=test_idx, columns=["y", "naive7", "arimax", "rf"], dtype=float)
-    out["y"] = d.loc[test_idx, "price"]; out["naive7"] = d["price"].shift(7).loc[test_idx]
-    for b in range(0, len(test_idx), refit_every):
-        blk = test_idx[b:b + refit_every]
-        train = d.loc[d.index < blk[0]]
-        mu, sd = train[EXOG].mean(), train[EXOG].std().replace(0, 1)     # τυποποίηση exog (βοηθά τη σύγκλιση)
-        Xall = (d[EXOG] - mu) / sd
-        res = SARIMAX(train["price"], exog=Xall.loc[train.index], order=order, seasonal_order=seasonal,
-                      enforce_stationarity=False, enforce_invertibility=False).fit(disp=False)
-        for t in blk:                                                   # one-step-ahead με append (χωρίς refit)
-            out.loc[t, "arimax"] = float(res.forecast(1, exog=Xall.loc[[t]]).iloc[0])
-            res = res.append(d.loc[[t], "price"], exog=Xall.loc[[t]], refit=False)
-        rf = RandomForestRegressor(n_estimators=400, min_samples_leaf=3, n_jobs=-1, random_state=42)
-        rf.fit(train[RF_FEATS], train["price"])
-        out.loc[blk, "rf"] = rf.predict(d.loc[blk, RF_FEATS])
-        print(f"μπλοκ {blk[0].date()} -> {blk[-1].date()} ok")
-    return out.dropna(), rf
-
-
-def spike_classifier(d, test_start):
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.metrics import precision_recall_fscore_support, average_precision_score
-    cut = pd.Timestamp(test_start, tz=d.index.tz)
-    tr, te = d[d.index < cut], d[d.index >= cut]
-    if te["spike"].sum() == 0 or tr["spike"].sum() == 0:
-        print("Spike RF: δεν υπάρχουν spikes στο train ή στο test, παραλείπεται."); return
-    clf = RandomForestClassifier(n_estimators=500, min_samples_leaf=3, class_weight="balanced",
-                                 n_jobs=-1, random_state=42).fit(tr[RF_FEATS], tr["spike"])
-    prob = clf.predict_proba(te[RF_FEATS])[:, 1]
-    p, r, f, _ = precision_recall_fscore_support(te["spike"], prob > 0.5, average="binary", zero_division=0)
-    print(f"Spike RF: precision={p:.2f} recall={r:.2f} F1={f:.2f} PR-AUC={average_precision_score(te['spike'], prob):.2f}"
-          f" | spike-ημέρες test: {int(te['spike'].sum())}/{len(te)}")
-
-
-def compare(out, rf):
-    from scipy import stats
-    e = {m: metrics(out["y"], out[m], m) for m in ["naive7", "arimax", "rf"]}
-    dd = e["arimax"] - e["rf"]
-    dm = dd.mean() / (dd.std(ddof=1) / np.sqrt(len(dd)))
-    print(f"Diebold-Mariano (ARIMAX vs RF): stat={dm:.2f}, p={2 * (1 - stats.norm.cdf(abs(dm))):.4f}")
-    print("RF feature importance:\n", pd.Series(rf.feature_importances_, index=RF_FEATS)
-          .sort_values(ascending=False).round(3).to_string())
-
-
 if __name__ == "__main__":
     if len(sys.argv) < 3 or sys.argv[2] not in WINDOWS:
-        sys.exit("Χρήση: python entsoe_gr_pipeline_v2.py weather|build|model  crisis|recent")
+        sys.exit("Χρήση: python entsoe_gr_pipeline_v2.py weather|build  crisis|recent")
     stage, period = sys.argv[1], sys.argv[2]
     if stage == "weather":
         download_weather(period)
     elif stage == "build":
         build(period)
-    elif stage == "model":
-        h = pd.read_parquet(f"dataset_hourly_{period}.parquet")
-        d = daily_dataset(h); d.to_parquet(f"dataset_daily_{period}.parquet")
-        print(f"Ημερήσιο dataset: {len(d)} ημέρες")
-        stationarity(d["price"])
-        out, rf = walk_forward(d, TEST_START[period])
-        compare(out, rf)
-        spike_classifier(d, TEST_START[period])
-        out.to_csv(f"forecasts_{period}.csv")
