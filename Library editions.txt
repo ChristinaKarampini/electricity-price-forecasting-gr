@@ -1,0 +1,12 @@
+Εκδόσεις όπως καταγράφηκαν στο config.json της εκτέλεσης που χρησιμοποιήθηκε στη διπλωματική
+(Python 3.13.14, Windows 11). Τα αποτελέσματα αναπαράγονται με σταθερό τυχαίο σπόρο (seed 42).
+pandas==2.3.3
+numpy==2.3.5
+scipy==1.18.1
+scikit-learn==1.9.1
+statsmodels==0.15.0
+entsoe-py==0.8.1
+pyarrow==25.0.1
+holidays==0.105
+matplotlib==3.11.2
+requests==2.32.5
