@@ -51,23 +51,13 @@ FINAL = "τελική"
 REUSE_ORDER = {"χωρίς_net_import", "net_import_ίδιας_ημέρας"}
 MODELS = ["naive1", "naive7", "arx", "arimax", "rf"]
 # Παραλλαγές RF (v4): (στόχος = μεταβολή;, παράθυρο εκπαίδευσης σε ημέρες ή None για διευρυνόμενο)
-ROLL_WINDOW = 60          # ημέρες· οι Michalakopoulos κ.ά. (2026) βρίσκουν ότι τα παράθυρα 45–60 ημερών αποδίδουν καλά
+ROLL_WINDOW = 60     # 45–60 ημερών αποδίδουν καλά
 EXTRA_RF = {"rf_diff": (True, None), "rf_roll": (False, ROLL_WINDOW), "rf_diff_roll": (True, ROLL_WINDOW)}
 EXTRA = list(EXTRA_RF)
 COLORS = {"y": "#000000", "arimax": "#1F4E79", "rf": "#C55A11"}   # σταθερή παλέτα σε όλα τα γραφήματα
 
 
 # ============================ ΔΕΔΟΜΕΝΑ ============================
-def load_ttf(index):
-    """Τιμή TTF της προηγούμενης ημέρας συναλλαγών (γνωστή πριν από το κλείσιμο της αγοράς)."""
-    if not os.path.exists(TTF_FILE):
-        return None
-    t = pd.read_csv(TTF_FILE, parse_dates=["date"]).set_index("date")["ttf"].sort_index()
-    t.index = t.index.tz_localize("Europe/Athens")
-    t = t.reindex(pd.date_range(t.index.min(), index.max(), freq="D", tz="Europe/Athens")).ffill()
-    return t.shift(1).reindex(index)
-
-
 def daily_dataset(h):
     h = h.copy()
     h.index = h.index.tz_convert("Europe/Athens")
