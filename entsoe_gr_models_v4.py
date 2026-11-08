@@ -25,7 +25,6 @@ VAL_FRAC = 0.2                           # τελευταίο 20% της εκπ�
 RF_PARAMS = {"n_estimators": 400, "min_samples_leaf": 3, "max_features": 1/3, "random_state": SEED, "n_jobs": -1}
 CLF_PARAMS = {"n_estimators": 500, "min_samples_leaf": 3, "class_weight": "balanced",
               "random_state": SEED, "n_jobs": -1}
-TTF_FILE = "data_raw/ttf_daily.csv"      # προαιρετικό: στήλες date, ttf (€/MWh)
 
 WEATHER = ["w_temperature_2m", "w_wind_speed_100m", "w_shortwave_radiation", "w_cloud_cover"]
 EXOG = ["residual_load", "res_share", "net_import", "w_temperature_2m", "w_wind_speed_100m",
@@ -73,9 +72,7 @@ def daily_dataset(h):
     d["spike_lag1"] = d["spike"].shift(1)
     for k in range(1, 7):
         d[f"dow_{k}"] = (d["dow"] == k).astype(float)
-    ttf = load_ttf(d.index)
-    if ttf is not None:
-        d["ttf_lag1"] = ttf
+    
     d = d.dropna()
     # Καθαρές εισαγωγές της προηγούμενης ημέρας (ο πίνακας δεν έχει κενές ημέρες, άρα shift(1) = προηγούμενη ημέρα).
     # Η πρώτη γραμμή συμπληρώνεται με την ίδια ημέρα, ώστε να μη χαθεί ημέρα και να μη αλλάξει το μέγεθος του συνόλου.
@@ -90,7 +87,7 @@ def feature_sets(d, weather=True, netimp="same"):
         ex = [c for c in ex if c != "net_import"]
     elif netimp == "lag1":
         ex = ["net_import_lag1" if c == "net_import" else c for c in ex]
-    exog = ex + (["ttf_lag1"] if "ttf_lag1" in d else [])
+    exog = ex 
     rf = exog + [c for c in RF_EXTRA if keep(c)]
     arx = exog + ["price_lag1", "price_lag7"] + [f"dow_{k}" for k in range(1, 7)]
     return exog, rf, arx
@@ -460,7 +457,7 @@ def run(period, h, use_arimax=True, use_extras=True):
     ts = TEST_START[period]
     train0 = d[d.index < pd.Timestamp(ts, tz=d.index.tz)]
     print(f"\n=== {period}: {len(d)} ημέρες, εκπαίδευση έως {ts}: {len(train0)} ημέρες, "
-          f"test: {len(d) - len(train0)} ημέρες, TTF: {'ναι' if 'ttf_lag1' in d else 'όχι'} ===")
+          f"test: {len(d) - len(train0)} ημέρες
     d.to_csv(f"{R}/dataset_daily.csv")
     chapter1_numbers(h, d).to_csv(f"{R}/ch1_numbers.csv", header=["τιμή"])
     if use_arimax:
